@@ -1,0 +1,10 @@
+[project]
+name = "mollis-runtime"
+version = "0.1.0"
+description = "Production-grade AI Operating System Runtime"
+requires-python = ">=3.12"
+
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["app"]
