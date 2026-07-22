@@ -76,6 +76,24 @@ CREATE TABLE IF NOT EXISTS events (
 );
 """
 
+CREATE_WORKFLOW_DEFINITIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+    name TEXT PRIMARY KEY,
+    definition_json TEXT NOT NULL,
+    version TEXT NOT NULL
+);
+"""
+
+CREATE_WORKFLOW_INSTANCES_TABLE = """
+CREATE TABLE IF NOT EXISTS workflow_instances (
+    instance_id TEXT PRIMARY KEY,
+    workflow_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    instance_json TEXT NOT NULL,
+    version TEXT NOT NULL
+);
+"""
+
 def initialize_schema(conn: sqlite3.Connection) -> None:
     """
     Apply database schema definitions to the SQLite connection.
@@ -94,3 +112,5 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         conn.execute(CREATE_SCHEDULER_STATE_TABLE)
         conn.execute(CREATE_SNAPSHOTS_TABLE)
         conn.execute(CREATE_EVENTS_TABLE)
+        conn.execute(CREATE_WORKFLOW_DEFINITIONS_TABLE)
+        conn.execute(CREATE_WORKFLOW_INSTANCES_TABLE)
