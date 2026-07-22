@@ -4,7 +4,7 @@ import threading
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 from runtime.models.task import Task
 from runtime.registry.executor_registry import ExecutorRegistry
 
@@ -34,23 +34,18 @@ class Worker:
         registry: ExecutorRegistry,
         task_queue: queue.Queue,
         on_task_completed: Callable[[str, float], None],
-        on_task_failed: Callable[[str, Exception], None]
+        on_task_failed: Callable[[str, Exception], None],
+        store: Optional[Any] = None
     ):
         """
         Initialize the Worker.
-
-        Args:
-            worker_id (str): Unique identifier of the worker.
-            registry (ExecutorRegistry): Registry containing executors.
-            task_queue (queue.Queue): Shared thread-safe task queue.
-            on_task_completed (Callable): Callback triggered on successful execution.
-            on_task_failed (Callable): Callback triggered on task failure.
         """
         self.worker_id = worker_id
         self.registry = registry
         self._task_queue = task_queue
         self._on_task_completed = on_task_completed
         self._on_task_failed = on_task_failed
+        self._store = store
 
         self.state = WorkerState.STOPPED
         self.current_task: Optional[Task] = None
@@ -128,6 +123,11 @@ class Worker:
                     self.heartbeat_time = datetime.now()
                     self.task_start_time = datetime.now()
 
+                if self._store and getattr(self._store, "event_store", None):
+                    from runtime.persistence.domain.events import TaskStarted, WorkerHeartbeat
+                    self._store.event_store.append(TaskStarted(task_id=task.id))
+                    self._store.event_store.append(WorkerHeartbeat(worker_id=self.worker_id, heartbeat_time=self.heartbeat_time.isoformat()))
+
                 start_time = time.time()
                 logger.info(f"Worker {self.worker_id} started execution of Task {task.id}")
                 try:
@@ -140,6 +140,10 @@ class Worker:
                     with self._lock:
                         if task.status != Taskstatus.FAILED:
                             task.complete()
+
+                    if self._store and getattr(self._store, "event_store", None):
+                        from runtime.persistence.domain.events import TaskCompleted
+                        self._store.event_store.append(TaskCompleted(task_id=task.id))
 
                     duration = time.time() - start_time
                     self._on_task_completed(self.worker_id, duration)

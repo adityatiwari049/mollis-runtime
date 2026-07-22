@@ -3,7 +3,7 @@ import threading
 import time
 import logging
 from datetime import datetime
-from typing import Optional, Dict, List, Callable
+from typing import Optional, Dict, List, Callable, Any
 from runtime.models.task import Task
 from runtime.registry.executor_registry import ExecutorRegistry
 from runtime.scheduling.worker.worker import Worker, WorkerState
@@ -17,14 +17,9 @@ class WorkerPool:
     Acts as the execution execution layer. Monitored by a supervisor to ensure high availability.
     """
 
-    def __init__(self, size: int, registry: ExecutorRegistry, task_failed_callback: Optional[Callable[[Task, Exception], None]] = None):
+    def __init__(self, size: int, registry: ExecutorRegistry, task_failed_callback: Optional[Callable[[Task, Exception], None]] = None, store: Optional[Any] = None):
         """
         Initialize the WorkerPool.
-
-        Args:
-            size (int): Total number of workers to maintain in the pool.
-            registry (ExecutorRegistry): Executor registry to execute incoming tasks.
-            task_failed_callback (Optional[Callable]): Callback triggered when a task fails.
         """
         if size <= 0:
             raise ValueError("Worker pool size must be greater than zero.")
@@ -32,6 +27,7 @@ class WorkerPool:
         self._size = size
         self._registry = registry
         self._task_failed_callback = task_failed_callback
+        self._store = store
         self._workers: Dict[str, Worker] = {}
         self._task_queue: queue.Queue[Task] = queue.Queue()
         self._lock = threading.Lock()
@@ -63,10 +59,16 @@ class WorkerPool:
                     registry=self._registry,
                     task_queue=self._task_queue,
                     on_task_completed=self._on_task_completed,
-                    on_task_failed=self._on_task_failed
+                    on_task_failed=self._on_task_failed,
+                    store=self._store
                 )
                 self._workers[worker_id] = worker
                 worker.start()
+
+            if self._store and getattr(self._store, "event_store", None):
+                from runtime.persistence.domain.events import WorkerStarted
+                for w_id in self._workers:
+                    self._store.event_store.append(WorkerStarted(worker_id=w_id))
 
             # Launch Supervisor
             self._supervisor_thread = threading.Thread(
@@ -95,6 +97,9 @@ class WorkerPool:
         # Join worker threads
         for worker in workers_to_stop:
             worker.join()
+            if self._store and getattr(self._store, "event_store", None):
+                from runtime.persistence.domain.events import WorkerStopped
+                self._store.event_store.append(WorkerStopped(worker_id=worker.worker_id))
 
         if self._supervisor_thread:
             self._supervisor_thread.join(timeout=2.0)
@@ -189,13 +194,19 @@ class WorkerPool:
                 for worker_id, worker in list(self._workers.items()):
                     if worker.state == WorkerState.FAILED:
                         logger.warning(f"Supervisor detected failed worker: {worker_id}. Initiating restart...")
+                        if self._store and getattr(self._store, "event_store", None):
+                            from runtime.persistence.domain.events import WorkerFailed, WorkerRecovered
+                            self._store.event_store.append(WorkerFailed(worker_id=worker_id, error_message="Worker thread crashed"))
+                            self._store.event_store.append(WorkerRecovered(worker_id=worker_id))
+
                         # Respawn and start worker
                         new_worker = Worker(
                             worker_id=worker_id,
                             registry=self._registry,
                             task_queue=self._task_queue,
                             on_task_completed=self._on_task_completed,
-                            on_task_failed=self._on_task_failed
+                            on_task_failed=self._on_task_failed,
+                            store=self._store
                         )
                         self._workers[worker_id] = new_worker
                         new_worker.start()

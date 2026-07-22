@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from runtime.models.task import Task
 from runtime.scheduling.queue.base_queue import BaseTaskQueue
 from runtime.scheduling.queue.policy import SchedulingPolicy, FIFOPolicy
@@ -23,26 +23,15 @@ class InMemoryTaskQueue(BaseTaskQueue):
     Uses a pluggable synchronization strategy and exposes queue metrics and domain events.
     """
 
-    def __init__(
-        self,
-        max_size: Optional[int] = None,
-        policy: Optional[SchedulingPolicy] = None,
-        lock: Optional[LockInterface] = None,
-        publisher: Optional[QueueEventPublisher] = None,
-    ):
+    def __init__(self, max_size: Optional[int] = None, policy: Optional[SchedulingPolicy] = None, lock: Optional[LockInterface] = None, publisher: Optional[QueueEventPublisher] = None, store: Optional[Any] = None):
         """
         Initialize the InMemoryTaskQueue.
-
-        Args:
-            max_size (Optional[int]): The maximum capacity of the queue. If None or <= 0, unbounded.
-            policy (Optional[SchedulingPolicy]): Strategy for ordering tasks. Defaults to FIFOPolicy.
-            lock (Optional[LockInterface]): Strategy for synchronizing access. Defaults to LocalThreadingLock.
-            publisher (Optional[QueueEventPublisher]): Event publisher for domain events. Defaults to NullEventPublisher.
         """
         self._max_size = max_size if max_size and max_size > 0 else None
         self._policy = policy or FIFOPolicy()
         self._lock = lock or LocalThreadingLock()
         self._publisher = publisher or NullEventPublisher()
+        self._store = store
 
         # Primary storage index: maps task_id -> Task
         # Complexity: O(1) lookups, insertions, deletions
@@ -72,11 +61,14 @@ class InMemoryTaskQueue(BaseTaskQueue):
             task.metadata["queued_at"] = datetime.now().isoformat()
 
             self._publisher.publish(TaskQueued(task_id=task.id))
+            if self._store and getattr(self._store, "event_store", None):
+                from runtime.persistence.domain.events import TaskQueued as PersistentTaskQueued
+                self._store.event_store.append(PersistentTaskQueued(task_id=task.id))
 
     def dequeue(self) -> Task:
         """
         Retrieve and remove the next task based on the scheduling policy.
-        Complexity: O(1) under FIFOPolicy, O(log N) under PriorityPolicy.
+        Complexity: O(1) under FIFO, O(log N) under Priority.
         """
         with self._lock:
             next_id = self._policy.next()
@@ -87,12 +79,15 @@ class InMemoryTaskQueue(BaseTaskQueue):
             self._dequeue_count += 1
 
             self._publisher.publish(TaskDequeued(task_id=task.id))
+            if self._store and getattr(self._store, "event_store", None):
+                from runtime.persistence.domain.events import TaskDequeued as PersistentTaskDequeued
+                self._store.event_store.append(PersistentTaskDequeued(task_id=task.id))
             return task
 
     def peek(self) -> Optional[Task]:
         """
         Peek at the next task to be retrieved without removing it.
-        Complexity: O(1) under FIFOPolicy, O(log N) under PriorityPolicy.
+        Complexity: O(1) under FIFO, O(log N) under Priority.
         """
         with self._lock:
             next_id = self._policy.peek()
@@ -103,7 +98,7 @@ class InMemoryTaskQueue(BaseTaskQueue):
     def cancel(self, task_id: str) -> Task:
         """
         Cancel a task by removing it from storage and the scheduling policy ordering.
-        Complexity: O(1) under FIFOPolicy, O(N) under PriorityPolicy (lazy deletion cleanup).
+        Complexity: O(1) under FIFO, O(N) under Priority.
         """
         with self._lock:
             if task_id not in self._storage:
@@ -114,6 +109,9 @@ class InMemoryTaskQueue(BaseTaskQueue):
             self._cancel_count += 1
 
             self._publisher.publish(TaskCancelled(task_id=task_id))
+            if self._store and getattr(self._store, "event_store", None):
+                from runtime.persistence.domain.events import TaskCancelled as PersistentTaskCancelled
+                self._store.event_store.append(PersistentTaskCancelled(task_id=task_id))
             return task
 
     def lookup(self, task_id: str) -> Task:

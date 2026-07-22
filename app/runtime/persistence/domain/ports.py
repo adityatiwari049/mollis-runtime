@@ -8,6 +8,8 @@ from runtime.persistence.domain.models import (
     SchedulerStateSnapshot,
 )
 
+from runtime.persistence.domain.events import RuntimeEvent
+
 class StorageTransaction(ABC):
     """
     Interface for transaction boundary management.
@@ -74,6 +76,51 @@ class WorkerStateRepository(ABC):
     @abstractmethod
     def list_all(self) -> List[WorkerStateSnapshot]:
         """List all worker states."""
+        pass
+
+
+class EventStore(ABC):
+    """
+    Port defining append-only domain event logging capabilities.
+    """
+    @abstractmethod
+    def append(self, event: RuntimeEvent) -> None:
+        """Append a single event to the store."""
+        pass
+
+    @abstractmethod
+    def append_batch(self, events: List[RuntimeEvent]) -> None:
+        """Append a batch of events atomically."""
+        pass
+
+    @abstractmethod
+    def load(self, event_id: str) -> Optional[RuntimeEvent]:
+        """Load a single event by ID."""
+        pass
+
+    @abstractmethod
+    def stream(self, limit: int = 100, offset: int = 0) -> List[RuntimeEvent]:
+        """Stream log events ordered by timestamp."""
+        pass
+
+    @abstractmethod
+    def stream_from(self, start_timestamp: str, limit: int = 100, offset: int = 0) -> List[RuntimeEvent]:
+        """Stream log events starting from a specific ISO timestamp."""
+        pass
+
+    @abstractmethod
+    def replay(self, runtime_id: str) -> List[RuntimeEvent]:
+        """Load all events for a given runtime execution to replay states."""
+        pass
+
+    @abstractmethod
+    def count(self) -> int:
+        """Get total events count."""
+        pass
+
+    @abstractmethod
+    def truncate(self) -> None:
+        """Truncate all events from log."""
         pass
 
 

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
     uptime_seconds REAL NOT NULL,
     delayed_task_ids TEXT NOT NULL,
     active_timeouts TEXT NOT NULL,
+    timestamp TEXT,
     version INTEGER NOT NULL
 );
 """
@@ -57,6 +58,21 @@ CREATE TABLE IF NOT EXISTS snapshots (
     timestamp TEXT NOT NULL,
     state_data TEXT NOT NULL,
     schema_version INTEGER NOT NULL
+);
+"""
+
+CREATE_EVENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS events (
+    sequence_number INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT UNIQUE NOT NULL,
+    runtime_id TEXT NOT NULL,
+    correlation_id TEXT,
+    causation_id TEXT,
+    timestamp TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    metadata TEXT,
+    data_payload TEXT NOT NULL
 );
 """
 
@@ -77,3 +93,4 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         conn.execute(CREATE_QUEUE_STATE_TABLE)
         conn.execute(CREATE_SCHEDULER_STATE_TABLE)
         conn.execute(CREATE_SNAPSHOTS_TABLE)
+        conn.execute(CREATE_EVENTS_TABLE)

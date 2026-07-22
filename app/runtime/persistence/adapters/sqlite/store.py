@@ -15,8 +15,10 @@ from runtime.persistence.adapters.sqlite.repositories import (
     SQLiteTaskStateRepository,
     SQLiteWorkerStateRepository,
 )
+from runtime.persistence.adapters.sqlite.event_store import SQLiteEventStore
 
 class SQLiteTransaction(StorageTransaction):
+# ... (No changes here, this is just for target content matching context)
     """
     SQLite transaction context manager. Utilizes a lock to ensure thread-safety
     across concurrent write attempts.
@@ -74,6 +76,7 @@ class SQLiteStateStore(BaseStateStore):
 
         # Initialize schema structure
         initialize_schema(self._conn)
+        self.event_store = SQLiteEventStore(self._conn, self._lock)
 
     def transaction(self) -> StorageTransaction:
         return SQLiteTransaction(self._conn, self._lock)
@@ -112,14 +115,15 @@ class SQLiteStateStore(BaseStateStore):
             # Save Scheduler State (row 1)
             self._conn.execute(
                 """
-                INSERT OR REPLACE INTO scheduler_state (id, started, uptime_seconds, delayed_task_ids, active_timeouts, version)
-                VALUES (1, ?, ?, ?, ?, ?);
+                INSERT OR REPLACE INTO scheduler_state (id, started, uptime_seconds, delayed_task_ids, active_timeouts, timestamp, version)
+                VALUES (1, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     1 if state.scheduler.started else 0,
                     state.scheduler.uptime_seconds,
                     json.dumps(state.scheduler.delayed_task_ids),
                     json.dumps(state.scheduler.active_timeouts),
+                    state.timestamp,
                     state.scheduler.version,
                 )
             )
@@ -147,6 +151,7 @@ class SQLiteStateStore(BaseStateStore):
             s_data["delayed_task_ids"] = json.loads(s_data["delayed_task_ids"])
             s_data["active_timeouts"] = json.loads(s_data["active_timeouts"])
             scheduler_snapshot = SchedulerStateSnapshot.from_dict(s_data)
+            timestamp = s_data.get("timestamp") or datetime.now().isoformat()
 
             # Read tasks
             tasks_repo = SQLiteTaskStateRepository(self._conn)
@@ -157,7 +162,7 @@ class SQLiteStateStore(BaseStateStore):
             workers = {w.worker_id: w for w in workers_repo.list_all()}
 
             return RuntimeState(
-                timestamp=datetime.now().isoformat(),
+                timestamp=timestamp,
                 tasks=tasks,
                 workers=workers,
                 queue=queue_snapshot,

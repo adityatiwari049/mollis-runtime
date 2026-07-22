@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 from runtime.managers.task_manager import TaskManager
 from runtime.models.task import Task, TaskType
 from runtime.registry.executor_registry import ExecutorRegistry
@@ -19,10 +19,12 @@ class Runtime:
         task_manager: TaskManager,
         registry: ExecutorRegistry,
         scheduler: Optional[BaseScheduler] = None,
-        admission_controller: Optional[AdmissionController] = None
+        admission_controller: Optional[AdmissionController] = None,
+        store: Optional[Any] = None
     ):
         self.task_manager = task_manager
         self.registry = registry
+        self.store = store
         
         # Default admission controller setup if none provided
         if admission_controller is None:
@@ -38,21 +40,28 @@ class Runtime:
             from runtime.scheduling.queue.in_memory_queue import InMemoryTaskQueue
             from runtime.scheduling.worker.pool import WorkerPool
             
-            queue = InMemoryTaskQueue()
-            worker_pool = WorkerPool(size=4, registry=self.registry)
+            queue = InMemoryTaskQueue(store=self.store)
+            worker_pool = WorkerPool(size=4, registry=self.registry, store=self.store)
             self.scheduler = IntelligentScheduler(
                 queue=queue,
                 worker_pool=worker_pool,
-                admission_controller=self.admission_controller
+                admission_controller=self.admission_controller,
+                store=self.store
             )
         else:
             self.scheduler = scheduler
+            # If scheduler is custom but doesn't have store, set it
+            if hasattr(self.scheduler, "_store") and self.scheduler._store is None:
+                self.scheduler._store = self.store
 
     def start(self) -> None:
         """Start the runtime engine scheduling pipeline and worker pool."""
         if hasattr(self.scheduler, "_worker_pool"):
             self.scheduler._worker_pool.start()
         self.scheduler.start()
+        if self.store and getattr(self.store, "event_store", None):
+            from runtime.persistence.domain.events import RuntimeStarted
+            self.store.event_store.append(RuntimeStarted())
         logger.info("Mollis Runtime Engine started.")
 
     def stop(self) -> None:
@@ -60,6 +69,9 @@ class Runtime:
         self.scheduler.stop()
         if hasattr(self.scheduler, "_worker_pool"):
             self.scheduler._worker_pool.stop()
+        if self.store and getattr(self.store, "event_store", None):
+            from runtime.persistence.domain.events import RuntimeStopped
+            self.store.event_store.append(RuntimeStopped())
         logger.info("Mollis Runtime Engine stopped.")
 
     def submit_task(
@@ -77,6 +89,16 @@ class Runtime:
         
         # Persist task in registry
         self.task_manager.add_task(task)
+
+        # Log TaskSubmitted event
+        if self.store and getattr(self.store, "event_store", None):
+            from runtime.persistence.domain.events import TaskSubmitted
+            self.store.event_store.append(TaskSubmitted(
+                task_id=task.id,
+                title=task.title,
+                task_type=task.task_type.name,
+                metadata=task.metadata or {}
+            ))
 
         # Delegate execution scheduling to Scheduler
         self.scheduler.schedule(task, delay_seconds=delay_seconds)
