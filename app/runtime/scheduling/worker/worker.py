@@ -55,6 +55,7 @@ class Worker:
         self.state = WorkerState.STOPPED
         self.current_task: Optional[Task] = None
         self.heartbeat_time = datetime.now()
+        self.task_start_time: Optional[datetime] = None
         self.tasks_processed = 0
         self.failures = 0
         self.start_time = datetime.now()
@@ -74,6 +75,7 @@ class Worker:
             self._stop_event.clear()
             self.start_time = datetime.now()
             self.heartbeat_time = datetime.now()
+            self.task_start_time = None
             self._thread = threading.Thread(
                 target=self._run,
                 name=f"MollisWorker-{self.worker_id}",
@@ -124,6 +126,7 @@ class Worker:
                     self.state = WorkerState.RUNNING
                     self.current_task = task
                     self.heartbeat_time = datetime.now()
+                    self.task_start_time = datetime.now()
 
                 start_time = time.time()
                 logger.info(f"Worker {self.worker_id} started execution of Task {task.id}")
@@ -131,7 +134,12 @@ class Worker:
                     task.start()
                     executor = self.registry.get_executor(task.task_type)
                     executor.execute(task)
-                    task.complete()
+                    
+                    # Prevent overwriting status if task was cancelled or failed due to timeout
+                    from runtime.models.task import Taskstatus
+                    with self._lock:
+                        if task.status != Taskstatus.FAILED:
+                            task.complete()
 
                     duration = time.time() - start_time
                     self._on_task_completed(self.worker_id, duration)
@@ -139,7 +147,10 @@ class Worker:
                         self.tasks_processed += 1
                     logger.info(f"Worker {self.worker_id} finished Task {task.id} in {duration:.4f}s")
                 except Exception as error:
-                    task.fail()
+                    # Only mark failed if not already failed by timeout
+                    from runtime.models.task import Taskstatus
+                    if task.status != Taskstatus.FAILED:
+                        task.fail()
                     self._on_task_failed(self.worker_id, error)
                     with self._lock:
                         self.failures += 1
@@ -149,6 +160,7 @@ class Worker:
                         if not self._stop_event.is_set():
                             self.state = WorkerState.IDLE
                         self.current_task = None
+                        self.task_start_time = None
                         self.heartbeat_time = datetime.now()
                     self._task_queue.task_done()
 

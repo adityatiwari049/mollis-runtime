@@ -3,7 +3,7 @@ import threading
 import time
 import logging
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Callable
 from runtime.models.task import Task
 from runtime.registry.executor_registry import ExecutorRegistry
 from runtime.scheduling.worker.worker import Worker, WorkerState
@@ -17,19 +17,21 @@ class WorkerPool:
     Acts as the execution execution layer. Monitored by a supervisor to ensure high availability.
     """
 
-    def __init__(self, size: int, registry: ExecutorRegistry):
+    def __init__(self, size: int, registry: ExecutorRegistry, task_failed_callback: Optional[Callable[[Task, Exception], None]] = None):
         """
         Initialize the WorkerPool.
 
         Args:
             size (int): Total number of workers to maintain in the pool.
             registry (ExecutorRegistry): Executor registry to execute incoming tasks.
+            task_failed_callback (Optional[Callable]): Callback triggered when a task fails.
         """
         if size <= 0:
             raise ValueError("Worker pool size must be greater than zero.")
 
         self._size = size
         self._registry = registry
+        self._task_failed_callback = task_failed_callback
         self._workers: Dict[str, Worker] = {}
         self._task_queue: queue.Queue[Task] = queue.Queue()
         self._lock = threading.Lock()
@@ -206,5 +208,17 @@ class WorkerPool:
 
     def _on_task_failed(self, worker_id: str, error: Exception) -> None:
         """Internal callback for metrics logging."""
+        task = None
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if worker:
+                task = worker.current_task
+
         with self._metrics_lock:
             self._tasks_failed += 1
+
+        if task and self._task_failed_callback:
+            try:
+                self._task_failed_callback(task, error)
+            except Exception as cb_err:
+                logger.error(f"Error executing task_failed_callback in WorkerPool: {cb_err}")
