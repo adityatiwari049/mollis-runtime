@@ -20,9 +20,10 @@ class TaskType(Enum):
 
 class Task:
 
-    def __init__(self , title: str,task_type: TaskType = TaskType.PYTHON,):
+    def __init__(self , title: str,task_type: TaskType = TaskType.PYTHON, metadata: dict = None):
         self.id = str(uuid4())
         self.task_type = task_type
+        self.metadata = metadata or {}
 
         if not title.strip():
             raise InvalidTaskTitleError()
